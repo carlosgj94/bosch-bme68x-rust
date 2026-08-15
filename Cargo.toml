@@ -6,11 +6,13 @@ rust-version = "1.75"
 authors = ["Carlos Juarez <carlosgj94@gmail.com>"]
 description = "A no_std embedded-hal driver for Bosch BME680 and BME688 environmental and gas sensors"
 documentation = "https://docs.rs/bme68x"
+repository = "https://github.com/carlosgj94/bosch-bme68x-rust"
 license = "BSD-3-Clause"
 readme = "README.md"
 keywords = ["bme680", "bme688", "gas", "sensor", "embedded-hal"]
 categories = ["embedded", "hardware-support", "no-std"]
 exclude = [".github/", "tests/reference/", "tests/reference-oracle/"]
+publish = ["crates-io"]
 
 [features]
 default = ["blocking"]

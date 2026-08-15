@@ -33,8 +33,6 @@ The default `blocking` feature can be disabled. Enable `async` for the
 bme68x = { version = "0.1", default-features = false, features = ["async"] }
 ```
 
-Until the first crates.io release, use a Git or local path dependency.
-
 Enable `float` to expose `bme68x::float`, which reproduces Bosch's
 single-precision `BME68X_USE_FPU` compensation path. This feature is
 independent of the blocking/async transport choice and does not add a math
