@@ -1,0 +1,42 @@
+[package]
+name = "bme68x"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Carlos Juarez <carlosgj94@gmail.com>"]
+description = "A no_std embedded-hal driver for Bosch BME680 and BME688 environmental and gas sensors"
+documentation = "https://docs.rs/bme68x"
+license = "BSD-3-Clause"
+readme = "README.md"
+keywords = ["bme680", "bme688", "gas", "sensor", "embedded-hal"]
+categories = ["embedded", "hardware-support", "no-std"]
+exclude = [".github/", "tests/reference/", "tests/reference-oracle/"]
+
+[features]
+default = ["blocking"]
+blocking = []
+async = ["dep:embedded-hal-async"]
+float = []
+defmt = ["dep:defmt"]
+serde = ["dep:serde"]
+
+[dependencies]
+embedded-hal = "1.0.0"
+embedded-hal-async = { version = "1.0.0", optional = true }
+defmt = { version = "1.0", optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+
+[dev-dependencies]
+embedded-hal-mock = { version = "0.11.1", features = ["eh1"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
