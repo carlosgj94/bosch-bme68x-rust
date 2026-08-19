@@ -6,6 +6,12 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Count every pending parallel-mode dummy/intermediate field when a gas-valid
+  field supersedes it, so discarded conversions are never silently omitted
+  from profile diagnostics.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

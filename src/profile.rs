@@ -409,7 +409,10 @@ impl ProfileCollector {
         }
 
         if step.measurement.status.gas_valid() {
-            self.pending_parallel = None;
+            if self.pending_parallel.take().is_some() {
+                self.counters.intermediate_fields =
+                    self.counters.intermediate_fields.saturating_add(1);
+            }
             self.commit(step);
         } else {
             if self.pending_parallel.is_some() {
@@ -616,6 +619,17 @@ mod tests {
         assert!(collector.is_structurally_complete());
         assert!(collector.all_steps_gas_valid());
         assert_eq!(collector.step(0).unwrap().measurement.measurement_index, 2);
+        assert_eq!(collector.counters().intermediate_fields, 2);
+    }
+
+    #[test]
+    fn parallel_valid_field_accounts_for_the_pending_dummy_it_replaces() {
+        let mut collector = ProfileCollector::new(OperationMode::Parallel, 1).unwrap();
+        collector.ingest(measurement(0, 0, 0x80), 100);
+        collector.ingest(measurement(0, 1, 0xb0), 200);
+
+        assert!(collector.all_steps_gas_valid());
+        assert_eq!(collector.observed_field_count(), 2);
         assert_eq!(collector.counters().intermediate_fields, 1);
     }
 
