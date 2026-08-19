@@ -12,6 +12,7 @@ mod error;
 #[cfg_attr(docsrs, doc(cfg(feature = "float")))]
 pub mod float;
 mod heater;
+mod profile;
 #[cfg(any(feature = "blocking", feature = "async"))]
 mod registers;
 mod types;
@@ -27,5 +28,11 @@ pub mod asynch;
 
 pub use data::{Measurement, MeasurementStatus, Measurements};
 pub use error::{ConfigError, Error, SelfTestFailure};
-pub use heater::{HeaterConfiguration, HeaterRegisters};
+pub use heater::{
+    HeaterConfiguration, HeaterConfigurationReadback, HeaterRegisters, SensorConfigurationReadback,
+};
+pub use profile::{
+    ProfileCollector, ProfileCollectorError, ProfileCounters, ProfileFinishReason, ProfileStep,
+    MAX_PROFILE_STEPS,
+};
 pub use types::*;

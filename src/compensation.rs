@@ -277,6 +277,17 @@ pub const fn encode_gas_wait(mut duration_ms: u16) -> u8 {
     duration_ms as u8 + factor * 64
 }
 
+/// Decode the exact represented gas-wait duration in milliseconds.
+///
+/// Encoding rounds down, so this can be lower than the duration originally
+/// passed to [`encode_gas_wait`].
+#[must_use]
+pub fn decode_gas_wait_ms(register: u8) -> u16 {
+    let mantissa = u16::from(register & 0x3f);
+    let factor = u32::from(register >> 6) * 2;
+    mantissa << factor
+}
+
 /// Encodes the parallel-mode shared heater duration in milliseconds.
 ///
 /// This uses the sensor's 0.477 ms step size before applying the same
@@ -295,6 +306,39 @@ pub const fn encode_shared_heater_duration(duration_ms: u16) -> u8 {
     }
 
     duration_steps as u8 + factor * 64
+}
+
+/// Decode the exact represented parallel shared wait in microseconds.
+///
+/// The register quantum is 477 microseconds and encoding rounds down. Use the
+/// read-back register value, rather than the requested millisecond duration,
+/// when calculating exact profile timing.
+#[must_use]
+pub fn decode_shared_heater_duration_us(register: u8) -> u32 {
+    let mantissa = u32::from(register & 0x3f);
+    let factor = u32::from(register >> 6) * 2;
+    (mantissa << factor) * 477
+}
+
+/// Exact duration represented by one parallel-mode profile step.
+///
+/// A nonzero `repetition_multiplier` repeats the shared-wait-plus-TPHG period.
+/// Bosch defines zero as a special case that skips the shared wait and performs
+/// exactly one TPHG conversion.
+#[must_use]
+pub fn parallel_step_duration_us(
+    repetition_multiplier: u8,
+    shared_duration_register: u8,
+    tphg_duration_us: u32,
+) -> u32 {
+    if repetition_multiplier == 0 {
+        tphg_duration_us
+    } else {
+        u32::from(repetition_multiplier).saturating_mul(
+            decode_shared_heater_duration_us(shared_duration_register)
+                .saturating_add(tphg_duration_us),
+        )
+    }
 }
 
 /// Returns Bosch's measurement duration in microseconds.
@@ -390,6 +434,10 @@ mod tests {
         assert_eq!(encode_gas_wait(4_031), 0xfe);
         assert_eq!(encode_gas_wait(4_032), 0xff);
         assert_eq!(encode_gas_wait(u16::MAX), 0xff);
+        assert_eq!(decode_gas_wait_ms(0x00), 0);
+        assert_eq!(decode_gas_wait_ms(0x3f), 63);
+        assert_eq!(decode_gas_wait_ms(0x50), 64);
+        assert_eq!(decode_gas_wait_ms(0xff), 4_032);
     }
 
     #[test]
@@ -401,6 +449,17 @@ mod tests {
         assert_eq!(encode_shared_heater_duration(1_922), 0xfe);
         assert_eq!(encode_shared_heater_duration(1_923), 0xff);
         assert_eq!(encode_shared_heater_duration(u16::MAX), 0xff);
+        assert_eq!(decode_shared_heater_duration_us(0x00), 0);
+        assert_eq!(decode_shared_heater_duration_us(0x73), 97_308);
+        assert_eq!(decode_shared_heater_duration_us(0xff), 1_923_264);
+        assert_eq!(
+            parallel_step_duration_us(5, encode_shared_heater_duration(99), 41_590),
+            694_490
+        );
+        assert_eq!(
+            parallel_step_duration_us(0, encode_shared_heater_duration(99), 41_590),
+            41_590
+        );
     }
 
     #[test]

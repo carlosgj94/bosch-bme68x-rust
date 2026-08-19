@@ -18,9 +18,11 @@ use crate::registers::{
     RESET_DELAY_US, SOFT_RESET_COMMAND,
 };
 use crate::{
-    CalibrationData, ConfigError, Configuration, Error, HeaterConfiguration, HeaterRegisters,
-    Measurement, MeasurementStatus, Measurements, OperationMode, Oversampling, RawMeasurement,
-    SelfTestFailure, StandbyTime, Variant,
+    calibration_register_fingerprint, CalibrationData, ConfigError, Configuration, Error,
+    HeaterConfiguration, HeaterConfigurationReadback, HeaterRegisters, Measurement,
+    MeasurementStatus, Measurements, OperationMode, Oversampling, RawMeasurement, SelfTestFailure,
+    SensorConfigurationReadback, StandbyTime, Variant, CALIBRATION_BLOCK_1_LEN,
+    CALIBRATION_BLOCK_2_LEN, CALIBRATION_DATA_LEN,
 };
 
 const MODE_CHANGE_ATTEMPTS: usize = 100;
@@ -35,6 +37,7 @@ pub struct Bme68x<I, D> {
     variant: Variant,
     ambient_temperature: i8,
     calibration: CalibrationData,
+    calibration_register_bytes: [u8; CALIBRATION_DATA_LEN],
 }
 
 impl<I, D> Bme68x<I, D>
@@ -68,6 +71,7 @@ where
             variant: Variant::GasLow,
             ambient_temperature,
             calibration: CalibrationData::default(),
+            calibration_register_bytes: [0; CALIBRATION_DATA_LEN],
         };
         sensor.initialize()?;
         Ok(sensor)
@@ -101,6 +105,12 @@ where
         self.read_registers(REG_COEFF1, &mut block_1)?;
         self.read_registers(REG_COEFF2, &mut block_2)?;
         self.read_registers(REG_COEFF3, &mut block_3)?;
+        self.calibration_register_bytes[..CALIBRATION_BLOCK_1_LEN].copy_from_slice(&block_1);
+        self.calibration_register_bytes
+            [CALIBRATION_BLOCK_1_LEN..CALIBRATION_BLOCK_1_LEN + CALIBRATION_BLOCK_2_LEN]
+            .copy_from_slice(&block_2);
+        self.calibration_register_bytes[CALIBRATION_BLOCK_1_LEN + CALIBRATION_BLOCK_2_LEN..]
+            .copy_from_slice(&block_3);
         self.calibration = CalibrationData::from_register_blocks(&block_1, &block_2, &block_3);
         Ok(())
     }
@@ -139,6 +149,21 @@ where
     #[must_use]
     pub const fn calibration(&self) -> &CalibrationData {
         &self.calibration
+    }
+
+    /// Return the exact 42 calibration bytes captured during initialization.
+    ///
+    /// The array concatenates the `0x8a`, `0xe1`, then `0x00` register blocks
+    /// in Bosch `SensorAPI` order and includes reserved bytes and bits verbatim.
+    #[must_use]
+    pub const fn calibration_register_bytes(&self) -> &[u8; CALIBRATION_DATA_LEN] {
+        &self.calibration_register_bytes
+    }
+
+    /// Stable FNV-1a fingerprint of the exact captured calibration bytes.
+    #[must_use]
+    pub fn calibration_fingerprint(&self) -> u64 {
+        calibration_register_fingerprint(&self.calibration_register_bytes)
     }
 
     /// Return the ambient temperature used for heater calculations.
@@ -370,11 +395,12 @@ where
             }
             HeaterConfiguration::Parallel {
                 temperatures_celsius,
-                durations_ms,
+                repetition_multipliers,
                 shared_duration_ms,
                 ..
             } => {
-                let len = Self::validate_profile(temperatures_celsius, durations_ms)?;
+                let len =
+                    Self::validate_parallel_profile(temperatures_celsius, repetition_multipliers)?;
                 if *shared_duration_ms == 0 {
                     return Err(Error::InvalidConfiguration(
                         ConfigError::MissingSharedHeaterDuration,
@@ -393,7 +419,7 @@ where
                         self.ambient_temperature,
                         &self.calibration,
                     );
-                    gas_wait[index] = durations_ms[index].to_le_bytes()[0];
+                    gas_wait[index] = repetition_multipliers[index];
                     let register_offset = u8::try_from(index).unwrap_or(0);
                     resistance_registers[index] = REG_RES_HEAT0 + register_offset;
                     wait_registers[index] = REG_GAS_WAIT0 + register_offset;
@@ -421,16 +447,57 @@ where
         self.write_registers(&[REG_CTRL_GAS_0, REG_CTRL_GAS_1], &control)
     }
 
-    /// Read all ten raw heater-resistance and gas-wait profile registers.
+    /// Read every raw heater profile register.
     ///
     /// # Errors
     ///
-    /// Returns the concrete bus error if either register read fails.
+    /// Returns the concrete bus error if a register read fails.
     pub fn heater_registers(&mut self) -> Result<HeaterRegisters, Error<I::Error>> {
         let mut registers = HeaterRegisters::default();
+        self.read_registers(REG_IDAC_HEAT0, &mut registers.current)?;
         self.read_registers(REG_RES_HEAT0, &mut registers.resistance)?;
         self.read_registers(REG_GAS_WAIT0, &mut registers.gas_wait)?;
+        self.read_registers(
+            REG_SHARED_HEATER_DURATION,
+            core::slice::from_mut(&mut registers.shared_duration),
+        )?;
         Ok(registers)
+    }
+
+    /// Read complete raw gas-heater control and profile state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the concrete bus error if a register read fails.
+    pub fn heater_configuration_readback(
+        &mut self,
+    ) -> Result<HeaterConfigurationReadback, Error<I::Error>> {
+        let registers = self.heater_registers()?;
+        let mut control = [0_u8; 2];
+        self.read_registers(REG_CTRL_GAS_0, &mut control)?;
+        Ok(HeaterConfigurationReadback {
+            registers,
+            control_gas_0: control[0],
+            control_gas_1: control[1],
+        })
+    }
+
+    /// Read operating mode, environmental settings, and complete heater state.
+    ///
+    /// Read this while the sensor is asleep when a coherent configuration
+    /// snapshot is required.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bus or invalid-register-value error.
+    pub fn configuration_readback(
+        &mut self,
+    ) -> Result<SensorConfigurationReadback, Error<I::Error>> {
+        Ok(SensorConfigurationReadback {
+            operation_mode: self.operation_mode()?,
+            environmental: self.configuration()?,
+            heater: self.heater_configuration_readback()?,
+        })
     }
 
     /// Read and compensate newly available data fields.
@@ -555,6 +622,28 @@ where
                 ConfigError::ProfileLengthMismatch {
                     temperatures: temperatures.len(),
                     durations: durations.len(),
+                },
+            ));
+        }
+        if temperatures.is_empty() || temperatures.len() > MAX_PROFILE_LEN {
+            return Err(Error::InvalidConfiguration(
+                ConfigError::InvalidProfileLength {
+                    length: temperatures.len(),
+                },
+            ));
+        }
+        Ok(temperatures.len())
+    }
+
+    fn validate_parallel_profile(
+        temperatures: &[u16],
+        repetition_multipliers: &[u8],
+    ) -> Result<usize, Error<I::Error>> {
+        if temperatures.len() != repetition_multipliers.len() {
+            return Err(Error::InvalidConfiguration(
+                ConfigError::ParallelProfileLengthMismatch {
+                    temperatures: temperatures.len(),
+                    repetition_multipliers: repetition_multipliers.len(),
                 },
             ));
         }
@@ -696,6 +785,11 @@ where
 
         Measurement {
             status: self.field_status(field),
+            raw_field_status: field[0],
+            raw_gas_status: match self.variant {
+                Variant::GasLow => field[14],
+                Variant::GasHigh => field[16],
+            },
             gas_index: field[0] & GAS_INDEX_MASK,
             measurement_index: field[1],
             heater_resistance,
@@ -1033,7 +1127,35 @@ mod tests {
         assert_eq!(sensor.chip_id(), CHIP_ID);
         assert_eq!(sensor.variant(), Variant::GasHigh);
         assert_eq!(sensor.calibration(), &reference_calibration());
+        assert_eq!(
+            sensor.calibration_register_bytes(),
+            &reference_calibration_bytes()
+        );
+        assert_eq!(
+            sensor.calibration_fingerprint(),
+            crate::calibration_register_fingerprint(&reference_calibration_bytes())
+        );
         assert_eq!(sensor.delay.nanoseconds, std::vec![RESET_DELAY_US * 1_000]);
+    }
+
+    #[test]
+    fn initialization_preserves_reserved_calibration_bytes_verbatim() {
+        let mut memory = TestInterface::sensor(Variant::GasHigh);
+        memory.bytes[usize::from(REG_COEFF1) + 3] = 0xa5;
+        let sensor = Bme68x::new(memory, RecordingDelay::default()).unwrap();
+        let mut expected = reference_calibration_bytes();
+        expected[3] = 0xa5;
+
+        assert_eq!(sensor.calibration(), &reference_calibration());
+        assert_eq!(sensor.calibration_register_bytes(), &expected);
+        assert_eq!(
+            sensor.calibration_fingerprint(),
+            crate::calibration_register_fingerprint(&expected)
+        );
+        assert_ne!(
+            sensor.calibration_fingerprint(),
+            sensor.calibration().coefficient_fingerprint()
+        );
     }
 
     #[test]
@@ -1133,6 +1255,14 @@ mod tests {
 
             assert_eq!(measurements.len(), 1);
             assert_eq!(decoded.status.bits(), 0xb0);
+            assert_eq!(decoded.raw_field_status, encoded[0]);
+            assert_eq!(
+                decoded.raw_gas_status,
+                match variant {
+                    Variant::GasLow => encoded[14],
+                    Variant::GasHigh => encoded[16],
+                }
+            );
             assert_eq!(decoded.gas_index, 2);
             assert_eq!(decoded.measurement_index, 0xfe);
             assert_eq!(decoded.heater_resistance, 0xa1);
@@ -1266,7 +1396,7 @@ mod tests {
     #[test]
     fn parallel_heater_programs_shared_duration_raw_waits_and_control() {
         let temperatures = [250_u16, 350];
-        let durations = [0x0123_u16, 0x0045];
+        let repetitions = [0x23_u8, 0x45];
         let mut sensor = initialized_sensor(Variant::GasHigh);
         sensor.interface.bytes[usize::from(REG_CTRL_GAS_0)] = 0xff;
         sensor.interface.bytes[usize::from(REG_CTRL_GAS_1)] = 0xc0;
@@ -1274,7 +1404,7 @@ mod tests {
             .set_heater_configuration(&HeaterConfiguration::Parallel {
                 enabled: true,
                 temperatures_celsius: &temperatures,
-                durations_ms: &durations,
+                repetition_multipliers: &repetitions,
                 shared_duration_ms: 100,
             })
             .unwrap();
@@ -1289,6 +1419,39 @@ mod tests {
         );
         assert_eq!(sensor.interface.bytes[usize::from(REG_CTRL_GAS_0)], 0xf7);
         assert_eq!(sensor.interface.bytes[usize::from(REG_CTRL_GAS_1)], 0xe2);
+
+        sensor.interface.bytes[usize::from(REG_IDAC_HEAT0)] = 0x9a;
+        let readback = sensor.configuration_readback().unwrap();
+        assert_eq!(readback.operation_mode, OperationMode::Sleep);
+        assert_eq!(readback.heater.registers.current[0], 0x9a);
+        assert_eq!(
+            readback.heater.registers.shared_duration,
+            compensation::encode_shared_heater_duration(100)
+        );
+        assert!(readback.heater.heater_enabled());
+        assert_eq!(readback.heater.run_gas(), 2);
+        assert_eq!(readback.heater.profile_length(), 2);
+    }
+
+    #[test]
+    fn parallel_profile_requires_one_repetition_multiplier_per_temperature() {
+        let temperatures = [200_u16, 300];
+        let repetitions = [5_u8];
+        let mut sensor = initialized_sensor(Variant::GasHigh);
+        assert_eq!(
+            sensor.set_heater_configuration(&HeaterConfiguration::Parallel {
+                enabled: true,
+                temperatures_celsius: &temperatures,
+                repetition_multipliers: &repetitions,
+                shared_duration_ms: 100,
+            }),
+            Err(Error::InvalidConfiguration(
+                ConfigError::ParallelProfileLengthMismatch {
+                    temperatures: 2,
+                    repetition_multipliers: 1,
+                }
+            ))
+        );
     }
 
     #[test]

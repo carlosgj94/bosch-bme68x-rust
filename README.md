@@ -20,7 +20,9 @@ The compatibility target is Bosch Sensortec's
 - forced, sequential, and parallel modes
 - temperature, pressure, humidity, and gas-resistance compensation
 - one-step and 1–10 step gas-heater profiles
-- measurement status, profile index, measurement index, and heater metadata
+- bounded 1–10 step profile reassembly across the three hardware field slots
+- complete status bytes, profile indexes, measurement indexes, and raw heater metadata
+- full configuration/heater readback and exact raw-calibration fingerprinting
 - exact measurement/heater-duration encodings
 - Bosch-style live physical self-test
 - raw register access and release of owned bus/delay objects
@@ -30,7 +32,7 @@ The default `blocking` feature can be disabled. Enable `async` for the
 
 ```toml
 [dependencies]
-bme68x = { version = "0.1", default-features = false, features = ["async"] }
+bme68x = { version = "0.2", default-features = false, features = ["async"] }
 ```
 
 Enable `float` to expose `bme68x::float`, which reproduces Bosch's
@@ -82,6 +84,14 @@ if let Some(field) = fields.as_slice().first() {
 
 The async frontend has the same shape under `bme68x::asynch`; its bus calls and
 delays are awaited.
+
+In parallel mode, `repetition_multipliers: &[u8]` maps directly to Bosch's
+`GAS_WAIT0..9` repetition bytes. These values are not millisecond durations.
+Each nonzero multiplier repeats the shared-wait-plus-TPHG period; zero is the
+documented special case that skips the shared wait and performs one TPHG.
+After starting parallel mode, poll `measurements(OperationMode::Parallel)` into
+`ProfileCollector` until it completes or a monotonic deadline expires, then
+explicitly return the sensor to `OperationMode::Sleep`.
 
 ## Output units
 

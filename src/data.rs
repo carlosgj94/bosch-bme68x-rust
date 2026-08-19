@@ -9,16 +9,32 @@ use crate::{FixedMeasurement, RawMeasurement};
 pub struct MeasurementStatus(u8);
 
 impl MeasurementStatus {
-    /// Create status flags from the three documented `BME68x` bits.
+    /// Create status flags from a complete status byte.
+    ///
+    /// The three documented Bosch flags occupy bits 7, 5, and 4. Remaining
+    /// bits are retained so callers can detect future or unexpected status
+    /// flags instead of silently discarding them.
     #[must_use]
     pub const fn from_bits(bits: u8) -> Self {
-        Self(bits & 0xb0)
+        Self(bits)
     }
 
-    /// Return the documented status bits.
+    /// Return the complete status byte supplied by the sensor/decoder.
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
+    }
+
+    /// Return only the three status bits documented by Bosch.
+    #[must_use]
+    pub const fn documented_bits(self) -> u8 {
+        self.0 & 0xb0
+    }
+
+    /// Return status bits not currently documented by Bosch.
+    #[must_use]
+    pub const fn unknown_bits(self) -> u8 {
+        self.0 & !0xb0
     }
 
     /// Whether this field contains data not previously read.
@@ -45,8 +61,17 @@ impl MeasurementStatus {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Measurement {
-    /// Data-ready, gas-valid, and heater-stable flags.
+    /// Bosch's combined data-ready, gas-valid, and heater-stable status byte.
     pub status: MeasurementStatus,
+    /// Exact field-status/index register byte (`FIELDx[0]`).
+    ///
+    /// The gas index is the low nibble; the remaining bits are retained
+    /// verbatim for diagnostics.
+    pub raw_field_status: u8,
+    /// Exact gas-ADC status/range byte selected for the detected variant.
+    ///
+    /// This is `FIELDx[14]` for Gas Low or `FIELDx[16]` for Gas High.
+    pub raw_gas_status: u8,
     /// Heater-profile index used for this conversion.
     pub gas_index: u8,
     /// Wrapping sub-measurement index used to order fields.
@@ -111,5 +136,21 @@ impl<'a> IntoIterator for &'a Measurements {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_preserves_unknown_bits_while_decoding_documented_flags() {
+        let status = MeasurementStatus::from_bits(0xf5);
+        assert_eq!(status.bits(), 0xf5);
+        assert_eq!(status.documented_bits(), 0xb0);
+        assert_eq!(status.unknown_bits(), 0x45);
+        assert!(status.is_new());
+        assert!(status.gas_valid());
+        assert!(status.heater_stable());
     }
 }

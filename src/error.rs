@@ -16,6 +16,13 @@ pub enum ConfigError {
         /// Number of duration entries.
         durations: usize,
     },
+    /// The parallel temperature and repetition-multiplier slices differ.
+    ParallelProfileLengthMismatch {
+        /// Number of temperature entries.
+        temperatures: usize,
+        /// Number of repetition-multiplier entries.
+        repetition_multipliers: usize,
+    },
     /// Parallel mode requires a non-zero shared heater duration.
     MissingSharedHeaterDuration,
     /// Data readout is not defined for sleep mode.

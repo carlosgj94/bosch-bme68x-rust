@@ -468,6 +468,74 @@ impl CalibrationData {
     pub const fn temperature_fine(&self) -> i32 {
         self.t_fine
     }
+
+    /// Encode the immutable factory coefficients in Bosch's canonical
+    /// 42-byte register-block layout.
+    ///
+    /// Reserved bytes and unused bits are zeroed. The mutable `t_fine`
+    /// compensation intermediate is deliberately excluded, so the result is
+    /// stable before and after measurements and can identify sensor changes.
+    #[must_use]
+    pub fn canonical_coefficient_bytes(&self) -> [u8; CALIBRATION_DATA_LEN] {
+        let mut bytes = [0_u8; CALIBRATION_DATA_LEN];
+        bytes[0..2].copy_from_slice(&self.par_t2.to_le_bytes());
+        bytes[2] = self.par_t3.to_ne_bytes()[0];
+        bytes[4..6].copy_from_slice(&self.par_p1.to_le_bytes());
+        bytes[6..8].copy_from_slice(&self.par_p2.to_le_bytes());
+        bytes[8] = self.par_p3.to_ne_bytes()[0];
+        bytes[10..12].copy_from_slice(&self.par_p4.to_le_bytes());
+        bytes[12..14].copy_from_slice(&self.par_p5.to_le_bytes());
+        bytes[14] = self.par_p7.to_ne_bytes()[0];
+        bytes[15] = self.par_p6.to_ne_bytes()[0];
+        bytes[18..20].copy_from_slice(&self.par_p8.to_le_bytes());
+        bytes[20..22].copy_from_slice(&self.par_p9.to_le_bytes());
+        bytes[22] = self.par_p10;
+        bytes[23] = (self.par_h2 >> 4).to_le_bytes()[0];
+        bytes[24] =
+            ((self.par_h2 & 0x0f).to_le_bytes()[0] << 4) | (self.par_h1 & 0x0f).to_le_bytes()[0];
+        bytes[25] = (self.par_h1 >> 4).to_le_bytes()[0];
+        bytes[26] = self.par_h3.to_ne_bytes()[0];
+        bytes[27] = self.par_h4.to_ne_bytes()[0];
+        bytes[28] = self.par_h5.to_ne_bytes()[0];
+        bytes[29] = self.par_h6;
+        bytes[30] = self.par_h7.to_ne_bytes()[0];
+        bytes[31..33].copy_from_slice(&self.par_t1.to_le_bytes());
+        bytes[33..35].copy_from_slice(&self.par_gh2.to_le_bytes());
+        bytes[35] = self.par_gh1.to_ne_bytes()[0];
+        bytes[36] = self.par_gh3.to_ne_bytes()[0];
+        bytes[37] = self.res_heat_val.to_ne_bytes()[0];
+        bytes[39] = (self.res_heat_range & 0x03) << 4;
+        bytes[41] = self.range_sw_err.to_ne_bytes()[0] << 4;
+        bytes
+    }
+
+    /// Stable FNV-1a 64-bit fingerprint of the normalized coefficients.
+    ///
+    /// Prefer the driver's `calibration_fingerprint()` method when the exact
+    /// raw calibration register image is available. This normalized helper is
+    /// useful for coefficient comparisons, but intentionally omits reserved
+    /// register bits and bytes.
+    #[must_use]
+    pub fn coefficient_fingerprint(&self) -> u64 {
+        calibration_register_fingerprint(&self.canonical_coefficient_bytes())
+    }
+}
+
+/// Calculate an FNV-1a 64-bit fingerprint over exact calibration bytes.
+///
+/// This deterministic checksum is intended to detect a changed sensor. It is
+/// not cryptographic and is not a globally unique sensor serial number.
+#[must_use]
+pub fn calibration_register_fingerprint(bytes: &[u8; CALIBRATION_DATA_LEN]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 #[cfg(test)]
@@ -515,6 +583,49 @@ mod tests {
         assert_eq!(calibration.par_gh2, -32_716);
         assert_eq!(calibration.res_heat_val, -1);
         assert_eq!(calibration.range_sw_err, -1);
+    }
+
+    #[test]
+    fn canonical_calibration_bytes_round_trip_and_ignore_temperature_fine() {
+        let mut bytes = core::array::from_fn::<_, CALIBRATION_DATA_LEN, _>(|index| {
+            u8::try_from(index).unwrap_or(0)
+        });
+        let mut calibration = CalibrationData::from_register_bytes(&bytes);
+        let canonical = calibration.canonical_coefficient_bytes();
+
+        assert_eq!(
+            CalibrationData::from_register_bytes(&canonical),
+            calibration
+        );
+        bytes[3] ^= 0xff;
+        bytes[9] ^= 0xff;
+        assert_eq!(
+            CalibrationData::from_register_bytes(&bytes).canonical_coefficient_bytes(),
+            canonical
+        );
+
+        let fingerprint = calibration.coefficient_fingerprint();
+        calibration.t_fine = 123_456;
+        assert_eq!(calibration.canonical_coefficient_bytes(), canonical);
+        assert_eq!(calibration.coefficient_fingerprint(), fingerprint);
+        assert_eq!(fingerprint, 0x5a5b_240a_eb30_385b);
+    }
+
+    #[test]
+    fn raw_calibration_fingerprint_includes_reserved_bytes() {
+        let mut first = [0_u8; CALIBRATION_DATA_LEN];
+        let mut second = first;
+        second[3] = 0xa5;
+
+        assert_ne!(
+            calibration_register_fingerprint(&first),
+            calibration_register_fingerprint(&second)
+        );
+        first[3] = 0xa5;
+        assert_eq!(
+            calibration_register_fingerprint(&first),
+            calibration_register_fingerprint(&second)
+        );
     }
 
     #[test]
