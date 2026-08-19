@@ -6,12 +6,6 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-
-- Count every pending parallel-mode dummy/intermediate field when a gas-valid
-  field supersedes it, so discarded conversions are never silently omitted
-  from profile diagnostics.
-
 ## [0.2.0] - 2026-08-19
 
 ### Added
@@ -30,6 +24,17 @@ project follows [Semantic Versioning](https://semver.org/).
 - **Breaking:** `Measurement` now exposes the exact field-status and gas-status
   register bytes, and `HeaterRegisters` now includes current-DAC and shared-wait
   registers. Public struct literals must initialize these new fields.
+- **Breaking:** `MeasurementStatus::from_bits` now preserves caller-supplied
+  unknown bits instead of masking to `0xb0`; use `documented_bits()` when only
+  Bosch's three documented flags are required.
+- **Breaking:** `ConfigError` adds `ParallelProfileLengthMismatch`, so
+  exhaustive matches must handle the new variant.
+
+### Fixed
+
+- Count every pending parallel-mode dummy/intermediate field when a gas-valid
+  field supersedes it, so discarded conversions are never silently omitted
+  from profile diagnostics.
 
 ## [0.1.0] - 2026-08-15
 
