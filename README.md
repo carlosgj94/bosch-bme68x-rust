@@ -21,7 +21,8 @@ The compatibility target is Bosch Sensortec's
 - temperature, pressure, humidity, and gas-resistance compensation
 - one-step and 1–10 step gas-heater profiles
 - bounded 1–10 step profile reassembly across the three hardware field slots
-- complete status bytes, profile indexes, measurement indexes, and raw heater metadata
+- Bosch-compatible combined status flags, exact raw status bytes, profile indexes,
+  measurement indexes, and raw heater metadata
 - full configuration/heater readback and exact raw-calibration fingerprinting
 - exact measurement/heater-duration encodings
 - Bosch-style live physical self-test

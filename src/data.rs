@@ -2,24 +2,25 @@
 
 use crate::{FixedMeasurement, RawMeasurement};
 
-/// Status bits attached to a `BME68x` measurement field.
+/// Bosch-compatible combined status flags attached to a `BME68x` measurement field.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MeasurementStatus(u8);
 
 impl MeasurementStatus {
-    /// Create status flags from a complete status byte.
+    /// Create a combined status value.
     ///
-    /// The three documented Bosch flags occupy bits 7, 5, and 4. Remaining
-    /// bits are retained so callers can detect future or unexpected status
-    /// flags instead of silently discarding them.
+    /// Sensor decoders synthesize this from `NEW_DATA` in `FIELDx[0]` and
+    /// `GAS_VALID`/`HEAT_STAB` in the variant-selected gas-status byte.
+    /// `from_bits` also preserves arbitrary bits supplied directly by callers
+    /// for forward compatibility.
     #[must_use]
     pub const fn from_bits(bits: u8) -> Self {
         Self(bits)
     }
 
-    /// Return the complete status byte supplied by the sensor/decoder.
+    /// Return the combined status bits held by this value.
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
@@ -31,7 +32,11 @@ impl MeasurementStatus {
         self.0 & 0xb0
     }
 
-    /// Return status bits not currently documented by Bosch.
+    /// Return bits outside the currently documented combined mask.
+    ///
+    /// Current sensor decoders mask to the three documented flags. Inspect
+    /// [`Measurement::raw_field_status`] and [`Measurement::raw_gas_status`]
+    /// for every physical register bit.
     #[must_use]
     pub const fn unknown_bits(self) -> u8 {
         self.0 & !0xb0
@@ -61,7 +66,8 @@ impl MeasurementStatus {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Measurement {
-    /// Bosch's combined data-ready, gas-valid, and heater-stable status byte.
+    /// Bosch-compatible combined `NEW_DATA`/`GAS_VALID`/`HEAT_STAB` flags
+    /// synthesized from the two raw status registers.
     pub status: MeasurementStatus,
     /// Exact field-status/index register byte (`FIELDx[0]`).
     ///
